@@ -4,9 +4,9 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import io
-import uuid
-from supabase import create_client, Client
+import requests
 import hashlib
+import json
 
 # Configurar página
 st.set_page_config(
@@ -20,12 +20,12 @@ st.set_page_config(
 SUPABASE_URL = "https://vpbwpphdeqpgwazwqzwx.supabase.co"
 SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwYnd3cGhkZXFwZ3dhend6d3giLCJyb2xlIjoiYW5vbiIsImlhdCI6MTcxNzc2NTAyMiwiZXhwIjoyMDMzMzI1MDIyfQ.s_q3hl7K9Dg5Kn2X7L4M8N9O0P1Q2R3S4T5U6V7W8"
 
-# Inicializar Supabase
-@st.cache_resource
-def init_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-
-supabase: Client = init_supabase()
+# Headers para requisições
+HEADERS = {
+    "apikey": SUPABASE_ANON_KEY,
+    "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+    "Content-Type": "application/json"
+}
 
 # Banco de dados B3
 @st.cache_data
@@ -92,22 +92,36 @@ def hash_password(password):
 def registrar_usuario(email, password, name):
     try:
         hashed_pwd = hash_password(password)
-        response = supabase.table("usuarios").insert({
+        url = f"{SUPABASE_URL}/rest/v1/usuarios"
+        
+        payload = {
             "email": email,
             "password_hash": hashed_pwd,
             "name": name
-        }).execute()
-        return True
+        }
+        
+        response = requests.post(url, json=payload, headers=HEADERS)
+        
+        if response.status_code == 201:
+            return True
+        else:
+            st.error(f"Erro ao registrar: {response.text}")
+            return False
     except Exception as e:
-        st.error(f"Erro ao registrar: {str(e)}")
+        st.error(f"Erro: {str(e)}")
         return False
 
 def login_usuario(email, password):
     try:
         hashed_pwd = hash_password(password)
-        response = supabase.table("usuarios").select("*").eq("email", email).eq("password_hash", hashed_pwd).execute()
-        if response.data:
-            return response.data[0]
+        url = f"{SUPABASE_URL}/rest/v1/usuarios?email=eq.{email}&password_hash=eq.{hashed_pwd}"
+        
+        response = requests.get(url, headers=HEADERS)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data and len(data) > 0:
+                return data[0]
         return None
     except Exception as e:
         st.error(f"Erro ao fazer login: {str(e)}")
@@ -115,27 +129,41 @@ def login_usuario(email, password):
 
 def salvar_operacao(user_id, ticker, tipo_ativo, qtd, preco_compra, preco_venda, codigo_opcao):
     try:
-        supabase.table("operacoes").insert({
+        url = f"{SUPABASE_URL}/rest/v1/operacoes"
+        
+        payload = {
             "user_id": user_id,
             "ticker": ticker,
             "tipo_ativo": tipo_ativo,
             "qtd": qtd,
-            "preco_compra": preco_compra,
-            "preco_venda": preco_venda if preco_venda > 0 else None,
+            "preco_compra": float(preco_compra),
+            "preco_venda": float(preco_venda) if preco_venda > 0 else None,
             "codigo_opcao": codigo_opcao if codigo_opcao else None,
             "status": "Em Andamento"
-        }).execute()
-        return True
+        }
+        
+        response = requests.post(url, json=payload, headers=HEADERS)
+        
+        if response.status_code == 201:
+            return True
+        else:
+            st.error(f"Erro ao salvar: {response.text}")
+            return False
     except Exception as e:
-        st.error(f"Erro ao salvar: {str(e)}")
+        st.error(f"Erro: {str(e)}")
         return False
 
 def carregar_operacoes(user_id):
     try:
-        response = supabase.table("operacoes").select("*").eq("user_id", user_id).execute()
-        return response.data if response.data else []
+        url = f"{SUPABASE_URL}/rest/v1/operacoes?user_id=eq.{user_id}"
+        
+        response = requests.get(url, headers=HEADERS)
+        
+        if response.status_code == 200:
+            return response.json()
+        return []
     except Exception as e:
-        st.error(f"Erro ao carregar operações: {str(e)}")
+        st.error(f"Erro ao carregar: {str(e)}")
         return []
 
 # --- FLUXO PRINCIPAL ---
@@ -143,7 +171,6 @@ def carregar_operacoes(user_id):
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# Se não está autenticado
 if st.session_state.user is None:
     st.title("🔐 Terminal B3 Master - Login")
     
@@ -155,13 +182,16 @@ if st.session_state.user is None:
         password = st.text_input("Senha:", type="password", key="login_password")
         
         if st.button("Entrar", key="btn_login"):
-            user = login_usuario(email, password)
-            if user:
-                st.session_state.user = user
-                st.success("✅ Login realizado com sucesso!")
-                st.rerun()
+            if email and password:
+                user = login_usuario(email, password)
+                if user:
+                    st.session_state.user = user
+                    st.success("✅ Login realizado com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("❌ Email ou senha incorretos")
             else:
-                st.error("❌ Email ou senha incorretos")
+                st.error("❌ Preencha email e senha")
     
     with tab2:
         st.subheader("Criar Conta")
@@ -171,7 +201,9 @@ if st.session_state.user is None:
         password_confirm = st.text_input("Confirmar Senha:", type="password", key="signup_password_confirm")
         
         if st.button("Cadastrar", key="btn_signup"):
-            if password != password_confirm:
+            if not nome or not email or not password:
+                st.error("❌ Preencha todos os campos")
+            elif password != password_confirm:
                 st.error("❌ As senhas não coincidem")
             elif len(password) < 6:
                 st.error("❌ A senha deve ter pelo menos 6 caracteres")
@@ -180,17 +212,14 @@ if st.session_state.user is None:
             else:
                 st.error("❌ Erro ao cadastrar. Email pode já estar em uso.")
 
-# Se está autenticado
 else:
     st.title("📊 Terminal Quant Completo B3 - Master Edition v4")
     st.markdown(f"**Bem-vindo, {st.session_state.user['name']}!**")
     
-    # Botão logout
     if st.sidebar.button("🚪 Logout"):
         st.session_state.user = None
         st.rerun()
     
-    # Resto da aplicação...
     banco_b3 = carregar_dados_consenso_b3()
     lista_tickers = list(banco_b3.keys())
     
@@ -244,7 +273,6 @@ else:
         df_ops = pd.DataFrame(operacoes)
         st.dataframe(df_ops, use_container_width=True, hide_index=True)
         
-        # Calcular lucro total
         lucro_total = 0
         for op in operacoes:
             if op["preco_venda"] is not None and op["preco_venda"] > 0:
