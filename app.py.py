@@ -92,7 +92,7 @@ def hash_password(password):
 def registrar_usuario(email, password, name):
     try:
         hashed_pwd = hash_password(password)
-        response = supabase.table("auth.users").insert({
+        response = supabase.table("usuarios").insert({
             "email": email,
             "password_hash": hashed_pwd,
             "name": name
@@ -105,7 +105,7 @@ def registrar_usuario(email, password, name):
 def login_usuario(email, password):
     try:
         hashed_pwd = hash_password(password)
-        response = supabase.table("auth.users").select("*").eq("email", email).eq("password_hash", hashed_pwd).execute()
+        response = supabase.table("usuarios").select("*").eq("email", email).eq("password_hash", hashed_pwd).execute()
         if response.data:
             return response.data[0]
         return None
