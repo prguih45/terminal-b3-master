@@ -3,10 +3,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import io
-import requests
+import sqlite3
 import hashlib
-import json
+import uuid
+import os
 
 # Configurar página
 st.set_page_config(
@@ -16,16 +16,47 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Credenciais Supabase
-SUPABASE_URL = "https://vpbwpphdeqpgwazwqzwx.supabase.co"
-SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwYnd3cGhkZXFwZ3dhend6d3giLCJyb2xlIjoiYW5vbiIsImlhdCI6MTcxNzc2NTAyMiwiZXhwIjoyMDMzMzI1MDIyfQ.s_q3hl7K9Dg5Kn2X7L4M8N9O0P1Q2R3S4T5U6V7W8"
+# Banco de dados SQLite
+DB_PATH = "terminal_b3.db"
 
-# Headers para requisições
-HEADERS = {
-    "apikey": SUPABASE_ANON_KEY,
-    "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-    "Content-Type": "application/json"
-}
+def init_db():
+    """Inicializa o banco de dados SQLite"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Tabela de usuários
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Tabela de operações
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS operacoes (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            tipo_ativo TEXT NOT NULL,
+            qtd INTEGER NOT NULL,
+            preco_compra REAL NOT NULL,
+            preco_venda REAL,
+            codigo_opcao TEXT,
+            status TEXT DEFAULT 'Em Andamento',
+            data_operacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES usuarios(id)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+# Inicializar banco ao abrir app
+init_db()
 
 # Banco de dados B3
 @st.cache_data
@@ -91,79 +122,106 @@ def hash_password(password):
 
 def registrar_usuario(email, password, name):
     try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
         hashed_pwd = hash_password(password)
-        url = f"{SUPABASE_URL}/rest/v1/usuarios"
+        user_id = str(uuid.uuid4())
         
-        payload = {
-            "email": email,
-            "password_hash": hashed_pwd,
-            "name": name
-        }
+        c.execute('''
+            INSERT INTO usuarios (id, email, password_hash, name)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, email, hashed_pwd, name))
         
-        response = requests.post(url, json=payload, headers=HEADERS)
-        
-        if response.status_code == 201:
-            return True
-        else:
-            st.error(f"Erro ao registrar: {response.text}")
-            return False
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.IntegrityError:
+        return False
     except Exception as e:
         st.error(f"Erro: {str(e)}")
         return False
 
 def login_usuario(email, password):
     try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
         hashed_pwd = hash_password(password)
-        url = f"{SUPABASE_URL}/rest/v1/usuarios?email=eq.{email}&password_hash=eq.{hashed_pwd}"
         
-        response = requests.get(url, headers=HEADERS)
+        c.execute('''
+            SELECT id, email, name, created_at FROM usuarios
+            WHERE email = ? AND password_hash = ?
+        ''', (email, hashed_pwd))
         
-        if response.status_code == 200:
-            data = response.json()
-            if data and len(data) > 0:
-                return data[0]
+        user = c.fetchone()
+        conn.close()
+        
+        if user:
+            return {
+                "id": user[0],
+                "email": user[1],
+                "name": user[2],
+                "created_at": user[3]
+            }
         return None
     except Exception as e:
-        st.error(f"Erro ao fazer login: {str(e)}")
+        st.error(f"Erro: {str(e)}")
         return None
 
 def salvar_operacao(user_id, ticker, tipo_ativo, qtd, preco_compra, preco_venda, codigo_opcao):
     try:
-        url = f"{SUPABASE_URL}/rest/v1/operacoes"
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
         
-        payload = {
-            "user_id": user_id,
-            "ticker": ticker,
-            "tipo_ativo": tipo_ativo,
-            "qtd": qtd,
-            "preco_compra": float(preco_compra),
-            "preco_venda": float(preco_venda) if preco_venda > 0 else None,
-            "codigo_opcao": codigo_opcao if codigo_opcao else None,
-            "status": "Em Andamento"
-        }
+        op_id = str(uuid.uuid4())
         
-        response = requests.post(url, json=payload, headers=HEADERS)
+        c.execute('''
+            INSERT INTO operacoes (id, user_id, ticker, tipo_ativo, qtd, preco_compra, preco_venda, codigo_opcao)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (op_id, user_id, ticker, tipo_ativo, qtd, preco_compra, 
+              preco_venda if preco_venda > 0 else None, codigo_opcao if codigo_opcao else None))
         
-        if response.status_code == 201:
-            return True
-        else:
-            st.error(f"Erro ao salvar: {response.text}")
-            return False
+        conn.commit()
+        conn.close()
+        return True
     except Exception as e:
         st.error(f"Erro: {str(e)}")
         return False
 
 def carregar_operacoes(user_id):
     try:
-        url = f"{SUPABASE_URL}/rest/v1/operacoes?user_id=eq.{user_id}"
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
         
-        response = requests.get(url, headers=HEADERS)
+        c.execute('''
+            SELECT id, user_id, ticker, tipo_ativo, qtd, preco_compra, preco_venda, codigo_opcao, status, data_operacao
+            FROM operacoes
+            WHERE user_id = ?
+            ORDER BY data_operacao DESC
+        ''', (user_id,))
         
-        if response.status_code == 200:
-            return response.json()
-        return []
+        rows = c.fetchall()
+        conn.close()
+        
+        operacoes = []
+        for row in rows:
+            operacoes.append({
+                "id": row[0],
+                "user_id": row[1],
+                "ticker": row[2],
+                "tipo_ativo": row[3],
+                "qtd": row[4],
+                "preco_compra": row[5],
+                "preco_venda": row[6],
+                "codigo_opcao": row[7],
+                "status": row[8],
+                "data_operacao": row[9]
+            })
+        
+        return operacoes
     except Exception as e:
-        st.error(f"Erro ao carregar: {str(e)}")
+        st.error(f"Erro: {str(e)}")
         return []
 
 # --- FLUXO PRINCIPAL ---
@@ -254,7 +312,7 @@ else:
                 st.session_state.user["id"],
                 ticker_chave,
                 tipo_ativo,
-                qtd_op,
+                int(qtd_op),
                 preco_compra_op,
                 preco_venda_op,
                 codigo_opcao
@@ -271,7 +329,8 @@ else:
     
     if operacoes:
         df_ops = pd.DataFrame(operacoes)
-        st.dataframe(df_ops, use_container_width=True, hide_index=True)
+        st.dataframe(df_ops[["ticker", "tipo_ativo", "qtd", "preco_compra", "preco_venda", "codigo_opcao", "status", "data_operacao"]], 
+                     use_container_width=True, hide_index=True)
         
         lucro_total = 0
         for op in operacoes:
