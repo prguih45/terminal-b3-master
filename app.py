@@ -5,20 +5,32 @@ import numpy as np
 from datetime import datetime, timedelta
 import io
 import uuid
+from supabase import create_client, Client
+import hashlib
 
-# Configuração da página do Streamlit
+# Configurar página
 st.set_page_config(
-    page_title="Quant Aggregator B3 - Master Terminal v4",
+    page_title="Terminal B3 Master - Com Login",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- BANCO DE DADOS COMPLETO E EXPANDIDO B3 (MÍNIMO 48 ATIVOS SELECIONADOS) ---
+# Credenciais Supabase
+SUPABASE_URL = "https://vpbwpphdeqpgwazwqzwx.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZwYnd3cGhkZXFwZ3dhend6d3giLCJyb2xlIjoiYW5vbiIsImlhdCI6MTcxNzc2NTAyMiwiZXhwIjoyMDMzMzI1MDIyfQ.s_q3hl7K9Dg5Kn2X7L4M8N9O0P1Q2R3S4T5U6V7W8"
+
+# Inicializar Supabase
+@st.cache_resource
+def init_supabase():
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+supabase: Client = init_supabase()
+
+# Banco de dados B3
 @st.cache_data
 def carregar_dados_consenso_b3():
     dados = {
-        # --- BLUE CHIPS & MAIS INDICADAS ---
         "VALE3.SA": {"Empresa": "Vale", "Setor": "Mineração", "Consenso_CP": "Alta", "Alvo_CP": 68.0, "Upside_MP": 18.5, "Fundamentos_LP": "Dividend Yield projetado robusto devido à geração de caixa."},
         "PETR4.SA": {"Empresa": "Petrobras", "Setor": "Petróleo e Gás", "Consenso_CP": "Neutro", "Alvo_CP": 41.0, "Upside_MP": 12.0, "Fundamentos_LP": "Geração de caixa forte e foco em refino sustentável."},
         "ITUB4.SA": {"Empresa": "Itaú Unibanco", "Setor": "Financeiro", "Consenso_CP": "Alta", "Alvo_CP": 39.5, "Upside_MP": 15.0, "Fundamentos_LP": "ROE consistente acima de 20% com forte controle de risco."},
@@ -74,352 +86,171 @@ def carregar_dados_consenso_b3():
     }
     return dados
 
-def calcular_terceira_sexta(ano, mes):
-    primeiro_dia = datetime(ano, mes, 1)
-    dia_semana_1 = primeiro_dia.weekday()
-    dias_ate_sexta = (4 - dia_semana_1) % 7
-    return primeiro_dia + timedelta(days=dias_ate_sexta) + timedelta(weeks=2)
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
-def calcular_opcao_b3_dinamica(ticker, preco_acao, tipo_opcao="Call"):
-    hoje = datetime.now()
-    ano_alvo, mes_alvo = hoje.year, hoje.month
-    vencimento_atual = calcular_terceira_sexta(ano_alvo, mes_alvo)
+def registrar_usuario(email, password, name):
+    try:
+        hashed_pwd = hash_password(password)
+        response = supabase.table("usuarios").insert({
+            "email": email,
+            "password_hash": hashed_pwd,
+            "name": name
+        }).execute()
+        return True
+    except Exception as e:
+        st.error(f"Erro ao registrar: {str(e)}")
+        return False
+
+def login_usuario(email, password):
+    try:
+        hashed_pwd = hash_password(password)
+        response = supabase.table("usuarios").select("*").eq("email", email).eq("password_hash", hashed_pwd).execute()
+        if response.data:
+            return response.data[0]
+        return None
+    except Exception as e:
+        st.error(f"Erro ao fazer login: {str(e)}")
+        return None
+
+def salvar_operacao(user_id, ticker, tipo_ativo, qtd, preco_compra, preco_venda, codigo_opcao):
+    try:
+        supabase.table("operacoes").insert({
+            "user_id": user_id,
+            "ticker": ticker,
+            "tipo_ativo": tipo_ativo,
+            "qtd": qtd,
+            "preco_compra": preco_compra,
+            "preco_venda": preco_venda if preco_venda > 0 else None,
+            "codigo_opcao": codigo_opcao if codigo_opcao else None,
+            "status": "Em Andamento"
+        }).execute()
+        return True
+    except Exception as e:
+        st.error(f"Erro ao salvar: {str(e)}")
+        return False
+
+def carregar_operacoes(user_id):
+    try:
+        response = supabase.table("operacoes").select("*").eq("user_id", user_id).execute()
+        return response.data if response.data else []
+    except Exception as e:
+        st.error(f"Erro ao carregar operações: {str(e)}")
+        return []
+
+# --- FLUXO PRINCIPAL ---
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+# Se não está autenticado
+if st.session_state.user is None:
+    st.title("🔐 Terminal B3 Master - Login")
     
-    if hoje.date() >= (vencimento_atual.date() - timedelta(days=4)):
-        if mes_alvo == 12:
-            mes_alvo, ano_alvo = 1, ano_alvo + 1
-        else:
-            mes_alvo += 1
-        vencimento_final = calcular_terceira_sexta(ano_alvo, mes_alvo)
-    else:
-        vencimento_final = vencimento_atual
+    tab1, tab2 = st.tabs(["Login", "Cadastro"])
+    
+    with tab1:
+        st.subheader("Faça Login")
+        email = st.text_input("Email:", key="login_email")
+        password = st.text_input("Senha:", type="password", key="login_password")
         
-    vencimento_str = vencimento_final.strftime("%d/%m/%Y")
+        if st.button("Entrar", key="btn_login"):
+            user = login_usuario(email, password)
+            if user:
+                st.session_state.user = user
+                st.success("✅ Login realizado com sucesso!")
+                st.rerun()
+            else:
+                st.error("❌ Email ou senha incorretos")
     
-    if tipo_opcao == "Call":
-        letras_call = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"]
-        letra_mes = letras_call[mes_alvo - 1]
-        strike_alvo = round(preco_acao * 1.10, 2)
-    else:
-        letras_put = ["M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"]
-        letra_mes = letras_put[mes_alvo - 1]
-        strike_alvo = round(preco_acao * 0.90, 2)
-    
-    codigo_base = ticker.replace(".SA", "")
-    letras_ticker = ''.join([char for char in codigo_base if not char.isdigit()])
-    ticker_opcao = f"{letras_ticker}{letra_mes}{int(strike_alvo)}"
-    
-    premio_estimado = round(preco_acao * 0.012, 2)
-    if premio_estimado < 0.01: 
-        premio_estimado = 0.05
-    
-    return {
-        "Opcao_Ticker": ticker_opcao, 
-        "Vencimento_B3": vencimento_str, 
-        "Strike_Alvo": strike_alvo, 
-        "Premio_Est": premio_estimado,
-        "Mes_Referencia": vencimento_final.strftime('%B / %Y').capitalize(),
-        "Tipo_Opcao": tipo_opcao
-    }
+    with tab2:
+        st.subheader("Criar Conta")
+        nome = st.text_input("Seu Nome:", key="signup_name")
+        email = st.text_input("Email:", key="signup_email")
+        password = st.text_input("Senha:", type="password", key="signup_password")
+        password_confirm = st.text_input("Confirmar Senha:", type="password", key="signup_password_confirm")
+        
+        if st.button("Cadastrar", key="btn_signup"):
+            if password != password_confirm:
+                st.error("❌ As senhas não coincidem")
+            elif len(password) < 6:
+                st.error("❌ A senha deve ter pelo menos 6 caracteres")
+            elif registrar_usuario(email, password, nome):
+                st.success("✅ Cadastro realizado! Faça login para continuar")
+            else:
+                st.error("❌ Erro ao cadastrar. Email pode já estar em uso.")
 
-def processar_mercado_b3(tickers):
-    dados_finais = {}
-    fim = datetime.now()
-    inicio = fim - timedelta(days=90)
-    
-    for ticker in tickers:
-        try:
-            asset = yf.Ticker(ticker)
-            hist = asset.history(start=inicio, end=fim)
-            if len(hist) < 2: continue
-            preco_anterior = float(hist['Close'].iloc[-1])
-            fundo = float(hist['Low'].min())
-            topo = float(hist['High'].max())
-            
-            hist['SMA20'] = hist['Close'].rolling(window=20).mean()
-            entrada = float(hist['SMA20'].iloc[-1]) if not np.isnan(hist['SMA20'].iloc[-1]) else preco_anterior * 0.98
-            
-            retornos = hist['Close'].pct_change()
-            vol = retornos.std() if not np.isnan(retornos.std()) else 0.02
-            stop = preco_anterior * (1 - (2 * vol))
-            alvo_saida = preco_anterior * (1 + (3 * vol))
-            
-            dados_opcoes_call = calcular_opcao_b3_dinamica(ticker, preco_anterior, tipo_opcao="Call")
-            dados_opcoes_put = calcular_opcao_b3_dinamica(ticker, preco_anterior, tipo_opcao="Put")
-            
-            dados_finais[ticker] = {
-                "Preco_Anterior": round(preco_anterior, 2), 
-                "Fundo": round(fundo, 2), 
-                "Topo": round(topo, 2),
-                "Entrada": round(entrada, 2), 
-                "Alvo_Saida": round(alvo_saida, 2), 
-                "Stop": round(stop, 2), 
-                "Call": dados_opcoes_call,
-                "Put": dados_opcoes_put
-            }
-        except Exception as e:
-            continue
-    return dados_finais
-
-if "carteira_operacoes" not in st.session_state:
-    st.session_state.carteira_operacoes = {}
-
-banco_b3 = carregar_dados_consenso_b3()
-lista_tickers = list(banco_b3.keys())
-
-with st.spinner("Atualizando base quantitativa completa da B3..."):
-    dados_mercado = processar_mercado_b3(lista_tickers)
-
-st.title("📊 Terminal Quant Completo B3 - Master Edition v4")
-st.markdown("**Agora com suporte para CALLs, PUTs e múltiplas operações por ativo!**")
-st.markdown("---")
-
-st.sidebar.header("Filtros Universais")
-modo_exibicao = st.sidebar.radio("Modo de Visualização:", ["Todas as Ações Indicadas", "Apenas Minha Carteira"])
-
-setores = sorted(list(set([info["Setor"] for info in banco_b3.values()])))
-setores_sel = st.sidebar.multiselect("Filtrar por Setor:", setores, default=setores)
-
-vieses = ["Alta", "Neutro", "Baixa"]
-vies_sel = st.sidebar.multiselect("Filtrar por Viés:", vieses, default=vieses)
-
-if st.sidebar.button("🔄 Forçar Recálculo Geral"):
-    st.cache_data.clear()
-
-st.write("### 💱 Painel de Lançamento de Operações (Ações e Derivativos)")
-
-col1, col2, col3, col4, col5 = st.columns(5)
-
-with col1:
-    tickers_boleta = sorted([t.replace(".SA", "") for t in lista_tickers])
-    acao_operar = st.selectbox("Selecione a Ação Base:", tickers_boleta, key="acao_base")
-
-with col2:
-    tipo_ativo = st.selectbox(
-        "Tipo de Ativo:", 
-        ["Ação Pura", "Call (Comprador)", "Put (Comprador)"],
-        key="tipo_ativo"
-    )
-
-with col3:
-    qtd_op = st.number_input("Quantidade:", min_value=0, value=100, step=100, key="qtd_op")
-
-ticker_mercado = f"{acao_operar}.SA"
-preco_ref = dados_mercado[ticker_mercado]["Preco_Anterior"] if ticker_mercado in dados_mercado else 10.0
-
-with col4:
-    if tipo_ativo == "Ação Pura":
-        label = "Preço da Ação (R$):"
-        default = preco_ref
-    elif tipo_ativo == "Call (Comprador)":
-        label = "Prêmio da Call (R$):"
-        default = dados_mercado[ticker_mercado]["Call"]["Premio_Est"] if ticker_mercado in dados_mercado else 0.5
-    else:
-        label = "Prêmio da Put (R$):"
-        default = dados_mercado[ticker_mercado]["Put"]["Premio_Est"] if ticker_mercado in dados_mercado else 0.5
-    
-    preco_compra_op = st.number_input(label, min_value=0.0, value=float(default), step=0.01, key="preco_compra")
-
-with col5:
-    preco_venda_op = st.number_input("Preço Venda (R$, 0 = aberto):", min_value=0.0, value=0.0, step=0.01, key="preco_venda")
-
-st.markdown("---")
-st.write("#### 🔧 Customização de Código de Opção")
-
-if tipo_ativo == "Ação Pura":
-    st.info("✅ Operação em ação pura - sem código de opção")
-    codigo_opcao_customizado = ""
+# Se está autenticado
 else:
-    if tipo_ativo == "Call (Comprador)":
-        opcao_recomendada = dados_mercado[ticker_mercado]["Call"]["Opcao_Ticker"] if ticker_mercado in dados_mercado else "?????"
-        vencimento_rec = dados_mercado[ticker_mercado]["Call"]["Vencimento_B3"] if ticker_mercado in dados_mercado else "N/A"
-        strike_rec = dados_mercado[ticker_mercado]["Call"]["Strike_Alvo"] if ticker_mercado in dados_mercado else 0
-    else:
-        opcao_recomendada = dados_mercado[ticker_mercado]["Put"]["Opcao_Ticker"] if ticker_mercado in dados_mercado else "?????"
-        vencimento_rec = dados_mercado[ticker_mercado]["Put"]["Vencimento_B3"] if ticker_mercado in dados_mercado else "N/A"
-        strike_rec = dados_mercado[ticker_mercado]["Put"]["Strike_Alvo"] if ticker_mercado in dados_mercado else 0
+    st.title("📊 Terminal Quant Completo B3 - Master Edition v4")
+    st.markdown(f"**Bem-vindo, {st.session_state.user['name']}!**")
     
-    col_code1, col_code2, col_code3 = st.columns(3)
-    with col_code1:
-        st.write(f"**Opção Recomendada:** {opcao_recomendada}")
-    with col_code2:
-        st.write(f"**Strike:** R$ {strike_rec}")
-    with col_code3:
-        st.write(f"**Vencimento:** {vencimento_rec}")
+    # Botão logout
+    if st.sidebar.button("🚪 Logout"):
+        st.session_state.user = None
+        st.rerun()
+    
+    # Resto da aplicação...
+    banco_b3 = carregar_dados_consenso_b3()
+    lista_tickers = list(banco_b3.keys())
     
     st.markdown("---")
-    codigo_opcao_customizado = st.text_input(
-        "Inserir código diferente (deixe em branco para usar o recomendado):",
-        value="",
-        placeholder=f"Ex: VALEJ120, PETRM40, etc",
-        key="codigo_custom"
-    )
-
-col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 2])
-
-with col_btn1:
-    if st.button("💾 Gravar Operação", use_container_width=True, key="btn_gravar"):
+    st.write("### 💱 Painel de Lançamento de Operações")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        tickers_boleta = sorted([t.replace(".SA", "") for t in lista_tickers])
+        acao_operar = st.selectbox("Selecione a Ação Base:", tickers_boleta, key="acao_base")
+    
+    with col2:
+        tipo_ativo = st.selectbox("Tipo de Ativo:", ["Ação Pura", "Call (Comprador)", "Put (Comprador)"], key="tipo_ativo")
+    
+    with col3:
+        qtd_op = st.number_input("Quantidade:", min_value=0, value=100, step=100, key="qtd_op")
+    
+    with col4:
+        preco_compra_op = st.number_input("Preço/Prêmio (R$):", min_value=0.0, value=10.0, step=0.01, key="preco_compra")
+    
+    with col5:
+        preco_venda_op = st.number_input("Preço Venda (R$, 0 = aberto):", min_value=0.0, value=0.0, step=0.01, key="preco_venda")
+    
+    st.markdown("---")
+    codigo_opcao = st.text_input("Código da Opção (opcional):", placeholder="Ex: VALEJ120", key="codigo_opcao")
+    
+    if st.button("💾 Gravar Operação"):
         if qtd_op > 0:
             ticker_chave = f"{acao_operar}.SA"
-            
-            if tipo_ativo == "Ação Pura":
-                codigo_final = ""
-            else:
-                codigo_final = codigo_opcao_customizado if codigo_opcao_customizado.strip() else opcao_recomendada
-            
-            operacao = {
-                "id": str(uuid.uuid4()),
-                "ticker": ticker_chave,
-                "tipo": tipo_ativo,
-                "qtd": qtd_op,
-                "preco_compra": preco_compra_op,
-                "preco_venda": preco_venda_op,
-                "codigo_opcao": codigo_final,
-                "data_operacao": datetime.now().strftime("%d/%m/%Y %H:%M")
-            }
-            
-            if ticker_chave not in st.session_state.carteira_operacoes:
-                st.session_state.carteira_operacoes[ticker_chave] = []
-            
-            st.session_state.carteira_operacoes[ticker_chave].append(operacao)
-            st.success(f"✅ Operação gravada! {tipo_ativo} de {acao_operar} x {qtd_op}")
+            if salvar_operacao(
+                st.session_state.user["id"],
+                ticker_chave,
+                tipo_ativo,
+                qtd_op,
+                preco_compra_op,
+                preco_venda_op,
+                codigo_opcao
+            ):
+                st.success("✅ Operação gravada com sucesso!")
+                st.rerun()
         else:
             st.error("❌ Quantidade deve ser > 0")
-
-with col_btn2:
-    if st.button("🗑️ Limpar Carteira", use_container_width=True, key="btn_limpar"):
-        st.session_state.carteira_operacoes = {}
-        st.info("Carteira limpa!")
-
-st.markdown("---")
-st.write("### 📈 Grade Dinâmica Unificada (Mercado + Minha Carteira)")
-
-linhas_tabela = []
-for ticker, info in banco_b3.items():
-    if ticker not in dados_mercado:
-        continue
     
-    if info["Setor"] not in setores_sel:
-        continue
-    if info["Consenso_CP"] not in vies_sel:
-        continue
+    st.markdown("---")
+    st.write("### 📈 Suas Operações")
     
-    m = dados_mercado[ticker]
-    tem_operacoes = ticker in st.session_state.carteira_operacoes
+    operacoes = carregar_operacoes(st.session_state.user["id"])
     
-    if modo_exibicao == "Apenas Minha Carteira" and not tem_operacoes:
-        continue
-    
-    if not tem_operacoes:
-        linhas_tabela.append({
-            "Ação": ticker.replace(".SA", ""),
-            "Fechamento Anterior (R$)": m["Preco_Anterior"],
-            "Entrada Técnica": m["Entrada"],
-            "Call Recomendada": m["Call"]["Opcao_Ticker"],
-            "Put Recomendada": m["Put"]["Opcao_Ticker"],
-            "Setor": info["Setor"],
-            "Tipo em Carteira": "-",
-            "Quantidade": "-",
-            "Preço Entrada": "-",
-            "Lucro/Prejuízo (R$)": 0.0,
-            "Data Operação": "-"
-        })
+    if operacoes:
+        df_ops = pd.DataFrame(operacoes)
+        st.dataframe(df_ops, use_container_width=True, hide_index=True)
+        
+        # Calcular lucro total
+        lucro_total = 0
+        for op in operacoes:
+            if op["preco_venda"] is not None and op["preco_venda"] > 0:
+                lucro = (op["preco_venda"] - op["preco_compra"]) * op["qtd"]
+                lucro_total += lucro
+        
+        st.metric("Lucro/Prejuízo Total (R$)", f"R$ {lucro_total:.2f}")
     else:
-        for op in st.session_state.carteira_operacoes[ticker]:
-            if op["tipo"] == "Ação Pura":
-                preco_ref_calculo = op["preco_venda"] if op["preco_venda"] > 0 else m["Preco_Anterior"]
-                lucro = (preco_ref_calculo - op["preco_compra"]) * op["qtd"]
-            else:
-                preco_ref_calculo = op["preco_venda"] if op["preco_venda"] > 0 else 0
-                if preco_ref_calculo > 0:
-                    lucro = (preco_ref_calculo - op["preco_compra"]) * op["qtd"]
-                else:
-                    lucro = 0
-            
-            linhas_tabela.append({
-                "Ação": ticker.replace(".SA", ""),
-                "Fechamento Anterior (R$)": m["Preco_Anterior"],
-                "Entrada Técnica": m["Entrada"],
-                "Call Recomendada": m["Call"]["Opcao_Ticker"],
-                "Put Recomendada": m["Put"]["Opcao_Ticker"],
-                "Setor": info["Setor"],
-                "Tipo em Carteira": op["tipo"],
-                "Código Opção": op["codigo_opcao"] if op["codigo_opcao"] else "-",
-                "Quantidade": op["qtd"],
-                "Preço Entrada (R$)": op["preco_compra"],
-                "Preço Venda (R$)": op["preco_venda"] if op["preco_venda"] > 0 else "Aberto",
-                "Lucro/Prejuízo (R$)": round(lucro, 2),
-                "Data Operação": op["data_operacao"]
-            })
-
-if linhas_tabela:
-    df_final = pd.DataFrame(linhas_tabela)
-    df_final = df_final.sort_values(by="Ação")
-    
-    lucro_total = df_final["Lucro/Prejuízo (R$)"].sum()
-    qtd_operacoes = len(df_final)
-    
-    c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
-    c_kpi1.metric("Operações em Carteira", qtd_operacoes)
-    c_kpi2.metric("Lucro/Prejuízo Total (R$)", f"R$ {round(lucro_total, 2)}")
-    c_kpi3.metric("Status", "✅ Operando" if lucro_total >= 0 else "⚠️ No vermelho")
-    
-    st.dataframe(df_final, use_container_width=True, hide_index=True)
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_final.to_excel(writer, index=False, sheet_name='Carteira_Operacoes')
-    excel_data = output.getvalue()
-    
-    st.download_button(
-        label="📥 Baixar Carteira em Excel",
-        data=excel_data,
-        file_name=f"carteira_b3_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-else:
-    st.warning("Nenhuma operação registrada. Use o painel acima para adicionar operações.")
-
-st.markdown("---")
-st.write("### 🔍 Análise Detalhada de Ativo")
-
-tickers_unicos = sorted([t.replace(".SA", "") for t in st.session_state.carteira_operacoes.keys()]) if st.session_state.carteira_operacoes else []
-
-if tickers_unicos:
-    ativo_analise = st.selectbox("Selecione ativo para análise:", tickers_unicos, key="ativo_analise")
-    
-    if ativo_analise:
-        ticker_completo = f"{ativo_analise}.SA"
-        dados_ativos = dados_mercado[ticker_completo]
-        consenso_ativo = banco_b3[ticker_completo]
-        
-        col_análise1, col_análise2, col_análise3 = st.columns(3)
-        
-        with col_análise1:
-            st.info(f"**📊 Fundamentos LP:**\n\n{consenso_ativo['Fundamentos_LP']}")
-        
-        with col_análise2:
-            st.success(f"""**🎯 Técnica - {ativo_analise}:**
-- **Entrada:** R$ {dados_ativos['Entrada']}
-- **Alvo:** R$ {dados_ativos['Alvo_Saida']}
-- **Stop:** R$ {dados_ativos['Stop']}
-- **Volatilidade:** {round((dados_ativos['Alvo_Saida'] - dados_ativos['Stop']) / dados_ativos['Preco_Anterior'] * 100, 1)}%
-""")
-        
-        with col_análise3:
-            st.warning(f"""**🚀 Opções Disponíveis:**
-
-**CALL (Alta):**
-- Código: {dados_ativos['Call']['Opcao_Ticker']}
-- Strike: R$ {dados_ativos['Call']['Strike_Alvo']}
-- Prêmio ~: R$ {dados_ativos['Call']['Premio_Est']}
-- Vence: {dados_ativos['Call']['Vencimento_B3']}
-
-**PUT (Proteção):**
-- Código: {dados_ativos['Put']['Opcao_Ticker']}
-- Strike: R$ {dados_ativos['Put']['Strike_Alvo']}
-- Prêmio ~: R$ {dados_ativos['Put']['Premio_Est']}
-- Vence: {dados_ativos['Put']['Vencimento_B3']}
-""")
-else:
-    st.info("Adicione operações acima para ver análise detalhada.")
+        st.info("Nenhuma operação registrada ainda.")
