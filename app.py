@@ -6,25 +6,50 @@ from datetime import datetime, timedelta
 import sqlite3
 import hashlib
 import uuid
-import os
+import json
+import plotly.graph_objects as go
+import plotly.express as px
+from io import BytesIO
 
-# Configurar página
+# ============ CONFIG ============
 st.set_page_config(
-    page_title="Terminal B3 Master - Com Login",
+    page_title="Terminal B3 Master",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Banco de dados SQLite
+# CSS Personalizado
+st.markdown("""
+<style>
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 10px;
+        color: white;
+    }
+    .success-card {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        padding: 15px;
+        border-radius: 8px;
+        color: white;
+    }
+    .danger-card {
+        background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+        padding: 15px;
+        border-radius: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ============ DATABASE ============
 DB_PATH = "terminal_b3.db"
 
 def init_db():
-    """Inicializa o banco de dados SQLite"""
+    """Inicializa banco SQLite com persistência"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
-    # Tabela de usuários
     c.execute('''
         CREATE TABLE IF NOT EXISTS usuarios (
             id TEXT PRIMARY KEY,
@@ -35,7 +60,6 @@ def init_db():
         )
     ''')
     
-    # Tabela de operações
     c.execute('''
         CREATE TABLE IF NOT EXISTS operacoes (
             id TEXT PRIMARY KEY,
@@ -55,68 +79,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Inicializar banco ao abrir app
 init_db()
 
-# Banco de dados B3
-@st.cache_data
-def carregar_dados_consenso_b3():
-    dados = {
-        "VALE3.SA": {"Empresa": "Vale", "Setor": "Mineração", "Consenso_CP": "Alta", "Alvo_CP": 68.0, "Upside_MP": 18.5, "Fundamentos_LP": "Dividend Yield projetado robusto devido à geração de caixa."},
-        "PETR4.SA": {"Empresa": "Petrobras", "Setor": "Petróleo e Gás", "Consenso_CP": "Neutro", "Alvo_CP": 41.0, "Upside_MP": 12.0, "Fundamentos_LP": "Geração de caixa forte e foco em refino sustentável."},
-        "ITUB4.SA": {"Empresa": "Itaú Unibanco", "Setor": "Financeiro", "Consenso_CP": "Alta", "Alvo_CP": 39.5, "Upside_MP": 15.0, "Fundamentos_LP": "ROE consistente acima de 20% com forte controle de risco."},
-        "BBDC4.SA": {"Empresa": "Bradesco", "Setor": "Financeiro", "Consenso_CP": "Neutro", "Alvo_CP": 16.0, "Upside_MP": 22.0, "Fundamentos_LP": "Turnaround operacional focado em eficiência no varejo bancário."},
-        "BBAS3.SA": {"Empresa": "Banco do Brasil", "Setor": "Financeiro", "Consenso_CP": "Alta", "Alvo_CP": 33.0, "Upside_MP": 25.0, "Fundamentos_LP": "Valuation muito descontado (P/E baixo) e forte no agronegócio."},
-        "WEGE3.SA": {"Empresa": "WEG", "Setor": "Industrial", "Consenso_CP": "Alta", "Alvo_CP": 54.0, "Upside_MP": 10.5, "Fundamentos_LP": "ROIC de 30%+ puxado por forte demanda global em eletrificação."},
-        "ELET3.SA": {"Empresa": "Eletrobras", "Setor": "Utilidade Pública", "Consenso_CP": "Alta", "Alvo_CP": 48.0, "Upside_MP": 28.0, "Fundamentos_LP": "Captura de sinergias operacionais e comerciais pós-privatização."},
-        "EQTL3.SA": {"Empresa": "Equatorial", "Setor": "Utilidade Pública", "Consenso_CP": "Alta", "Alvo_CP": 36.0, "Upside_MP": 14.0, "Fundamentos_LP": "Excelente histórico de turnaround em ativos de energia distribuída."},
-        "RENT3.SA": {"Empresa": "Localiza", "Setor": "Consumo Cíclico", "Consenso_CP": "Neutro", "Alvo_CP": 52.0, "Upside_MP": 19.0, "Fundamentos_LP": "Ganho de escala incomparável na gestão e compra de frotas."},
-        "SUZB3.SA": {"Empresa": "Suzano", "Setor": "Materiais Básicos", "Consenso_CP": "Alta", "Alvo_CP": 65.0, "Upside_MP": 16.5, "Fundamentos_LP": "Projeto Cerrado reduzindo sensivelmente o custo caixa global."},
-        "BPAC11.SA": {"Empresa": "BTG Pactual", "Setor": "Financeiro", "Consenso_CP": "Alta", "Alvo_CP": 42.0, "Upside_MP": 15.5, "Fundamentos_LP": "Liderança em assessoria e captação líquida no wealth management."},
-        "PRIO3.SA": {"Empresa": "PRIO", "Setor": "Petróleo e Gás", "Consenso_CP": "Alta", "Alvo_CP": 56.0, "Upside_MP": 32.0, "Fundamentos_LP": "Aumento expressivo de extração orgânica no campo de Wahoo."},
-        "VBBR3.SA": {"Empresa": "Vibra Energia", "Setor": "Petróleo e Gás", "Consenso_CP": "Alta", "Alvo_CP": 28.0, "Upside_MP": 20.0, "Fundamentos_LP": "Expansão de margens de distribuição de combustíveis nas redes de postos."},
-        "LREN3.SA": {"Empresa": "Lojas Renner", "Setor": "Consumo Cíclico", "Consenso_CP": "Alta", "Alvo_CP": 22.0, "Upside_MP": 23.0, "Fundamentos_LP": "Recuperação no varejo de moda e melhora nas provisões da Realize."},
-        "EMBR3.SA": {"Empresa": "Embraer", "Setor": "Industrial", "Consenso_CP": "Alta", "Alvo_CP": 40.0, "Upside_MP": 31.0, "Fundamentos_LP": "Forte carteira de pedidos comerciais e contratos em defesa aérea."},
-        "AZUL4.SA": {"Empresa": "Azul", "Setor": "Transporte", "Consenso_CP": "Neutro", "Alvo_CP": 12.0, "Upside_MP": 40.0, "Fundamentos_LP": "Geração operacional saudável, dependendo de acordos com arrendadores."},
-        "BEEF3.SA": {"Empresa": "Minerva", "Setor": "Alimentos", "Consenso_CP": "Neutro", "Alvo_CP": 8.0, "Upside_MP": 26.0, "Fundamentos_LP": "Alavancagem temporária após compra de plantas da Marfrig na AL."},
-        "MGLU3.SA": {"Empresa": "Magazine Luiza", "Setor": "Consumo Cíclico", "Consenso_CP": "Baixa", "Alvo_CP": 14.0, "Upside_MP": 15.0, "Fundamentos_LP": "Reestruturação de canais físicos e foco em serviços de marketplace."},
-        "BHIA3.SA": {"Empresa": "Casas Bahia", "Setor": "Consumo Cíclico", "Consenso_CP": "Baixa", "Alvo_CP": 6.0, "Upside_MP": 12.0, "Fundamentos_LP": "Foco severo em queima de estoques e redução de despesas fixas."},
-        "CVCB3.SA": {"Empresa": "CVC Brasil", "Setor": "Consumo Cíclico", "Consenso_CP": "Neutro", "Alvo_CP": 3.2, "Upside_MP": 35.0, "Fundamentos_LP": "Retorno expressivo das franquias físicas de viagens e melhora no take-rate."},
-        "YDUQ3.SA": {"Empresa": "Yduqs", "Setor": "Educação", "Consenso_CP": "Neutro", "Alvo_CP": 16.0, "Upside_MP": 25.0, "Fundamentos_LP": "Resiliência e avanço expressivo na captação do segmento de Medicina."},
-        "COGN3.SA": {"Empresa": "Cogna", "Setor": "Educação", "Consenso_CP": "Neutro", "Alvo_CP": 2.8, "Upside_MP": 22.0, "Fundamentos_LP": "Melhora no fluxo de caixa livre operacional e renegociação da Kroton."},
-        "RADL3.SA": {"Empresa": "Raia Drogasil", "Setor": "Saúde", "Consenso_CP": "Neutro", "Alvo_CP": 30.0, "Upside_MP": 8.0, "Fundamentos_LP": "Liderança consolidada com forte capilaridade e modelo digital maduro."},
-        "GGBR4.SA": {"Empresa": "Gerdau", "Setor": "Mineração/Siderurgia", "Consenso_CP": "Neutro", "Alvo_CP": 21.0, "Upside_MP": 14.0, "Fundamentos_LP": "Forte exposição ao mercado imobiliário e industrial dos EUA."},
-        "CMIG4.SA": {"Empresa": "Cemig", "Setor": "Utilidade Pública", "Consenso_CP": "Neutro", "Alvo_CP": 13.0, "Upside_MP": 11.0, "Fundamentos_LP": "Plano eficiente focado em desinvestimentos de participações."},
-        "SBSP3.SA": {"Empresa": "Sabesp", "Setor": "Utilidade Pública", "Consenso_CP": "Alta", "Alvo_CP": 110.0, "Upside_MP": 24.0, "Fundamentos_LP": "Ganhos severos de eficiência privada pós-desestatização."},
-        "SANB11.SA": {"Empresa": "Santander BR", "Setor": "Financeiro", "Consenso_CP": "Baixa", "Alvo_CP": 26.0, "Upside_MP": 2.0, "Fundamentos_LP": "Margens financeiras sob pressão temporária devido ao mix de varejo."},
-        "CPLE6.SA": {"Empresa": "Copel", "Setor": "Utilidade Pública", "Consenso_CP": "Alta", "Alvo_CP": 11.5, "Upside_MP": 15.0, "Fundamentos_LP": "Corte agressivo de despesas pós-transformação em corporação."},
-        "VIVT3.SA": {"Empresa": "Telefonica BR", "Setor": "Telecom", "Consenso_CP": "Alta", "Alvo_CP": 57.0, "Upside_MP": 12.0, "Fundamentos_LP": "Geração previsível de caixa livre com payout historicamente alto."},
-        "ABEV3.SA": {"Empresa": "Ambev", "Setor": "Consumo não Cíclico", "Consenso_CP": "Neutro", "Alvo_CP": 14.5, "Upside_MP": 11.0, "Fundamentos_LP": "Forte geração de caixa livre, mas enfrenta competição regional dura."},
-        "BBSE3.SA": {"Empresa": "BB Seguridade", "Setor": "Seguros", "Consenso_CP": "Alta", "Alvo_CP": 38.0, "Upside_MP": 14.0, "Fundamentos_LP": "Retorno sobre capital elevado impulsionado pelo braço do agronegócio."},
-        "CXSE3.SA": {"Empresa": "Caixa Seguridade", "Setor": "Seguros", "Consenso_CP": "Alta", "Alvo_CP": 17.0, "Upside_MP": 15.0, "Fundamentos_LP": "Crescimento contínuo de prêmios emitidos no balcão de habitação."},
-        "EGIE3.SA": {"Empresa": "Engie Brasil", "Setor": "Utilidade Pública", "Consenso_CP": "Alta", "Alvo_CP": 46.0, "Upside_MP": 10.0, "Fundamentos_LP": "Portfólio resiliente em contratos de longo prazo com proteção inflacionária."},
-        "CCRO3.SA": {"Empresa": "CCR", "Setor": "Infraestrutura", "Consenso_CP": "Alta", "Alvo_CP": 15.0, "Upside_MP": 18.0, "Fundamentos_LP": "Previsibilidade severa em concessões de rodovias e aeroportos contratados."},
-        "RAIZ4.SA": {"Empresa": "Raízen", "Setor": "Petróleo/Etanol", "Consenso_CP": "Neutro", "Alvo_CP": 4.2, "Upside_MP": 25.0, "Fundamentos_LP": "Tese concentrada na maturação de usinas de etanol de segunda geração."},
-        "CSAN3.SA": {"Empresa": "Cosan", "Setor": "Holding/Energia", "Consenso_CP": "Alta", "Alvo_CP": 21.0, "Upside_MP": 26.5, "Fundamentos_LP": "Desbloqueio estrutural de valor de suas controladas de peso."},
-        "CSNA3.SA": {"Empresa": "Siderúrgica Nacional", "Setor": "Mineração/Siderurgia", "Consenso_CP": "Neutro", "Alvo_CP": 15.5, "Upside_MP": 12.0, "Fundamentos_LP": "Alavancagem financeira requer monitoramento de curto prazo."},
-        "USIM5.SA": {"Empresa": "Usiminas", "Setor": "Mineração/Siderurgia", "Consenso_CP": "Neutro", "Alvo_CP": 8.5, "Upside_MP": 14.0, "Fundamentos_LP": "Estabilização da planta após reforma estrutural do Alto-Forno 3."},
-        "MRVE3.SA": {"Empresa": "MRV Engenharia", "Setor": "Construção Civil", "Consenso_CP": "Alta", "Alvo_CP": 11.0, "Upside_MP": 35.0, "Fundamentos_LP": "Aumento no ticket médio do programa Minha Casa Minha Vida impulsiona margens."},
-        "CYRE3.SA": {"Empresa": "Cyrela", "Setor": "Construção Civil", "Consenso_CP": "Alta", "Alvo_CP": 26.0, "Upside_MP": 18.0, "Fundamentos_LP": "Liderança focada em alta renda com forte velocidade de vendas."},
-        "TAEE11.SA": {"Empresa": "Taesa", "Setor": "Utilidade Pública", "Consenso_CP": "Neutro", "Alvo_CP": 36.0, "Upside_MP": 5.0, "Fundamentos_LP": "Receitas previsíveis indexadas por IGP-M e IPCA em linhas maduras."},
-        "TRPL4.SA": {"Empresa": "ISA CTEEP", "Setor": "Utilidade Pública", "Consenso_CP": "Alta", "Alvo_CP": 29.0, "Upside_MP": 11.0, "Fundamentos_LP": "Forte fluxo de novas subestações entrando em RAP operacionais."},
-        "MULT3.SA": {"Empresa": "Multiplan", "Setor": "Shopping Centers", "Consenso_CP": "Alta", "Alvo_CP": 31.0, "Upside_MP": 14.5, "Fundamentos_LP": "Ativos localizados em pontos premium com alto poder aquisitivo dos clientes."},
-        "TIMS3.SA": {"Empresa": "TIM Brasil", "Setor": "Telecom", "Consenso_CP": "Alta", "Alvo_CP": 21.0, "Upside_MP": 13.0, "Fundamentos_LP": "Ganhos em eficiência e migração pós-consolidação de infraestrutura de rede."},
-        "TOTV3.SA": {"Empresa": "Totvs", "Setor": "Tecnologia", "Consenso_CP": "Alta", "Alvo_CP": 38.0, "Upside_MP": 17.5, "Fundamentos_LP": "Dominância absoluta em ERP corporativo com altíssima taxa de retenção."},
-        "BRFS3.SA": {"Empresa": "BRF", "Setor": "Alimentos", "Consenso_CP": "Alta", "Alvo_CP": 26.0, "Upside_MP": 15.0, "Fundamentos_LP": "Desalavancagem muito veloz e queda acentuada nos custos de insumos de grãos."},
-        "JBSS3.SA": {"Empresa": "JBS", "Setor": "Alimentos", "Consenso_CP": "Alta", "Alvo_CP": 36.0, "Upside_MP": 22.0, "Fundamentos_LP": "Presença geográfica robusta em múltiplos continentes reduz riscos cíclicos."},
-        "STBP3.SA": {"Empresa": "Santos Brasil", "Setor": "Logística", "Consenso_CP": "Alta", "Alvo_CP": 16.0, "Upside_MP": 12.0, "Fundamentos_LP": "Operação portuária resiliente e contratos de tarifas portuárias consolidados."},
-        "RAIL3.SA": {"Empresa": "Rumo", "Setor": "Logística", "Consenso_CP": "Alta", "Alvo_CP": 27.0, "Upside_MP": 19.0, "Fundamentos_LP": "Expansão da malha logística do Centro-Oeste garante escoamento futuro de safras."},
-        "FLRY3.SA": {"Empresa": "Fleury", "Setor": "Saúde", "Consenso_CP": "Alta", "Alvo_CP": 19.5, "Upside_MP": 15.0, "Fundamentos_LP": "Captura rápida de sinergias da fusão com o grupo Pardini."},
-        "ALUP11.SA": {"Empresa": "Alupar", "Setor": "Utilidade Pública", "Consenso_CP": "Alta", "Alvo_CP": 33.0, "Upside_MP": 12.0, "Fundamentos_LP": "Contratos regulados longos protegidos do risco de volume."},
-        "CPFE3.SA": {"Empresa": "CPFL Energia", "Setor": "Utilidade Pública", "Consenso_CP": "Alta", "Alvo_CP": 39.0, "Upside_MP": 11.0, "Fundamentos_LP": "Excelente histórico operacional com faturamento estável em distribuição."}
-    }
-    return dados
-
+# ============ FUNÇÕES ============
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -124,7 +89,6 @@ def registrar_usuario(email, password, name):
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        
         hashed_pwd = hash_password(password)
         user_id = str(uuid.uuid4())
         
@@ -146,7 +110,6 @@ def login_usuario(email, password):
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        
         hashed_pwd = hash_password(password)
         
         c.execute('''
@@ -158,12 +121,7 @@ def login_usuario(email, password):
         conn.close()
         
         if user:
-            return {
-                "id": user[0],
-                "email": user[1],
-                "name": user[2],
-                "created_at": user[3]
-            }
+            return {"id": user[0], "email": user[1], "name": user[2], "created_at": user[3]}
         return None
     except Exception as e:
         st.error(f"Erro: {str(e)}")
@@ -173,7 +131,6 @@ def salvar_operacao(user_id, ticker, tipo_ativo, qtd, preco_compra, preco_venda,
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        
         op_id = str(uuid.uuid4())
         
         c.execute('''
@@ -224,120 +181,341 @@ def carregar_operacoes(user_id):
         st.error(f"Erro: {str(e)}")
         return []
 
-# --- FLUXO PRINCIPAL ---
+def deletar_operacao(op_id):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('DELETE FROM operacoes WHERE id = ?', (op_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Erro: {str(e)}")
+        return False
 
+def atualizar_operacao(op_id, tipo_ativo, qtd, preco_compra, preco_venda, codigo_opcao, status):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('''
+            UPDATE operacoes 
+            SET tipo_ativo=?, qtd=?, preco_compra=?, preco_venda=?, codigo_opcao=?, status=?
+            WHERE id = ?
+        ''', (tipo_ativo, qtd, preco_compra, preco_venda if preco_venda > 0 else None, codigo_opcao, status, op_id))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Erro: {str(e)}")
+        return False
+
+# ============ DADOS B3 ============
+@st.cache_data
+def carregar_dados_b3():
+    return {
+        "VALE3.SA": {"Empresa": "Vale", "Setor": "Mineração"},
+        "PETR4.SA": {"Empresa": "Petrobras", "Setor": "Petróleo e Gás"},
+        "ITUB4.SA": {"Empresa": "Itaú Unibanco", "Setor": "Financeiro"},
+        "BBDC4.SA": {"Empresa": "Bradesco", "Setor": "Financeiro"},
+        "BBAS3.SA": {"Empresa": "Banco do Brasil", "Setor": "Financeiro"},
+        "WEGE3.SA": {"Empresa": "WEG", "Setor": "Industrial"},
+        "ELET3.SA": {"Empresa": "Eletrobras", "Setor": "Utilidade Pública"},
+        "EQTL3.SA": {"Empresa": "Equatorial", "Setor": "Utilidade Pública"},
+        "RENT3.SA": {"Empresa": "Localiza", "Setor": "Consumo Cíclico"},
+        "SUZB3.SA": {"Empresa": "Suzano", "Setor": "Materiais Básicos"},
+        "PRIO3.SA": {"Empresa": "PRIO", "Setor": "Petróleo e Gás"},
+        "BRFS3.SA": {"Empresa": "BRF", "Setor": "Alimentos"},
+        "JBSS3.SA": {"Empresa": "JBS", "Setor": "Alimentos"},
+        "RAIL3.SA": {"Empresa": "Rumo", "Setor": "Logística"},
+        "TOTV3.SA": {"Empresa": "Totvs", "Setor": "Tecnologia"},
+        "TRPL4.SA": {"Empresa": "ISA CTEEP", "Setor": "Utilidade Pública"},
+        "CCRO3.SA": {"Empresa": "CCR", "Setor": "Infraestrutura"},
+    }
+
+# ============ MAIN APP ============
 if "user" not in st.session_state:
     st.session_state.user = None
 
 if st.session_state.user is None:
-    st.title("🔐 Terminal B3 Master - Login")
-    
-    tab1, tab2 = st.tabs(["Login", "Cadastro"])
-    
-    with tab1:
-        st.subheader("Faça Login")
-        email = st.text_input("Email:", key="login_email")
-        password = st.text_input("Senha:", type="password", key="login_password")
+    # TELA DE LOGIN
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("# 📊 Terminal B3 Master")
+        st.markdown("---")
         
-        if st.button("Entrar", key="btn_login"):
-            if email and password:
-                user = login_usuario(email, password)
-                if user:
-                    st.session_state.user = user
-                    st.success("✅ Login realizado com sucesso!")
-                    st.rerun()
+        tab1, tab2 = st.tabs(["🔐 Login", "📝 Cadastro"])
+        
+        with tab1:
+            st.subheader("Faça Login")
+            email = st.text_input("📧 Email:", key="login_email")
+            password = st.text_input("🔒 Senha:", type="password", key="login_password")
+            
+            if st.button("✅ Entrar", use_container_width=True, type="primary"):
+                if email and password:
+                    user = login_usuario(email, password)
+                    if user:
+                        st.session_state.user = user
+                        st.success("✅ Login realizado!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Email ou senha incorretos")
                 else:
-                    st.error("❌ Email ou senha incorretos")
-            else:
-                st.error("❌ Preencha email e senha")
-    
-    with tab2:
-        st.subheader("Criar Conta")
-        nome = st.text_input("Seu Nome:", key="signup_name")
-        email = st.text_input("Email:", key="signup_email")
-        password = st.text_input("Senha:", type="password", key="signup_password")
-        password_confirm = st.text_input("Confirmar Senha:", type="password", key="signup_password_confirm")
+                    st.error("❌ Preencha todos os campos")
         
-        if st.button("Cadastrar", key="btn_signup"):
-            if not nome or not email or not password:
-                st.error("❌ Preencha todos os campos")
-            elif password != password_confirm:
-                st.error("❌ As senhas não coincidem")
-            elif len(password) < 6:
-                st.error("❌ A senha deve ter pelo menos 6 caracteres")
-            elif registrar_usuario(email, password, nome):
-                st.success("✅ Cadastro realizado! Faça login para continuar")
-            else:
-                st.error("❌ Erro ao cadastrar. Email pode já estar em uso.")
+        with tab2:
+            st.subheader("Criar Conta")
+            nome = st.text_input("👤 Seu Nome:", key="signup_name")
+            email = st.text_input("📧 Email:", key="signup_email")
+            password = st.text_input("🔒 Senha:", type="password", key="signup_password")
+            password_confirm = st.text_input("🔒 Confirmar:", type="password", key="signup_password_confirm")
+            
+            if st.button("✅ Cadastrar", use_container_width=True, type="primary"):
+                if not nome or not email or not password:
+                    st.error("❌ Preencha todos os campos")
+                elif password != password_confirm:
+                    st.error("❌ Senhas não coincidem")
+                elif len(password) < 6:
+                    st.error("❌ Senha deve ter 6+ caracteres")
+                elif registrar_usuario(email, password, nome):
+                    st.success("✅ Cadastro realizado! Faça login")
+                else:
+                    st.error("❌ Email já existe")
 
 else:
-    st.title("📊 Terminal Quant Completo B3 - Master Edition v4")
+    # APP PRINCIPAL
+    st.markdown(f"# 📊 Terminal B3 Master")
     st.markdown(f"**Bem-vindo, {st.session_state.user['name']}!**")
     
-    if st.sidebar.button("🚪 Logout"):
-        st.session_state.user = None
-        st.rerun()
-    
-    banco_b3 = carregar_dados_consenso_b3()
-    lista_tickers = list(banco_b3.keys())
-    
-    st.markdown("---")
-    st.write("### 💱 Painel de Lançamento de Operações")
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        tickers_boleta = sorted([t.replace(".SA", "") for t in lista_tickers])
-        acao_operar = st.selectbox("Selecione a Ação Base:", tickers_boleta, key="acao_base")
-    
+    col1, col2 = st.columns([10, 2])
     with col2:
-        tipo_ativo = st.selectbox("Tipo de Ativo:", ["Ação Pura", "Call (Comprador)", "Put (Comprador)"], key="tipo_ativo")
+        if st.button("🚪 Logout", use_container_width=True):
+            st.session_state.user = None
+            st.rerun()
     
-    with col3:
-        qtd_op = st.number_input("Quantidade:", min_value=0, value=100, step=100, key="qtd_op")
-    
-    with col4:
-        preco_compra_op = st.number_input("Preço/Prêmio (R$):", min_value=0.0, value=10.0, step=0.01, key="preco_compra")
-    
-    with col5:
-        preco_venda_op = st.number_input("Preço Venda (R$, 0 = aberto):", min_value=0.0, value=0.0, step=0.01, key="preco_venda")
-    
-    st.markdown("---")
-    codigo_opcao = st.text_input("Código da Opção (opcional):", placeholder="Ex: VALEJ120", key="codigo_opcao")
-    
-    if st.button("💾 Gravar Operação"):
-        if qtd_op > 0:
-            ticker_chave = f"{acao_operar}.SA"
-            if salvar_operacao(
-                st.session_state.user["id"],
-                ticker_chave,
-                tipo_ativo,
-                int(qtd_op),
-                preco_compra_op,
-                preco_venda_op,
-                codigo_opcao
-            ):
-                st.success("✅ Operação gravada com sucesso!")
-                st.rerun()
-        else:
-            st.error("❌ Quantidade deve ser > 0")
-    
-    st.markdown("---")
-    st.write("### 📈 Suas Operações")
-    
+    banco_b3 = carregar_dados_b3()
+    lista_tickers = list(banco_b3.keys())
     operacoes = carregar_operacoes(st.session_state.user["id"])
     
-    if operacoes:
-        df_ops = pd.DataFrame(operacoes)
-        st.dataframe(df_ops[["ticker", "tipo_ativo", "qtd", "preco_compra", "preco_venda", "codigo_opcao", "status", "data_operacao"]], 
-                     use_container_width=True, hide_index=True)
+    # ===== TABS PRINCIPAIS =====
+    tab1, tab2, tab3 = st.tabs(["📝 Operações", "📊 Relatórios", "📈 Análise"])
+    
+    # ===== TAB 1: OPERAÇÕES =====
+    with tab1:
+        st.markdown("## 💱 Lançar Nova Operação")
         
-        lucro_total = 0
-        for op in operacoes:
-            if op["preco_venda"] is not None and op["preco_venda"] > 0:
-                lucro = (op["preco_venda"] - op["preco_compra"]) * op["qtd"]
-                lucro_total += lucro
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            acao = st.selectbox("Ação:", sorted([t.replace(".SA", "") for t in lista_tickers]), key="acao")
+        with col2:
+            tipo = st.selectbox("Tipo:", ["Ação Pura", "Call", "Put"], key="tipo")
+        with col3:
+            qtd = st.number_input("Qtd:", min_value=1, value=100, step=100, key="qtd")
+        with col4:
+            pc = st.number_input("Preço Compra:", min_value=0.01, value=10.0, step=0.01, key="pc")
+        with col5:
+            pv = st.number_input("Preço Venda:", min_value=0.0, value=0.0, step=0.01, key="pv")
         
-        st.metric("Lucro/Prejuízo Total (R$)", f"R$ {lucro_total:.2f}")
-    else:
-        st.info("Nenhuma operação registrada ainda.")
+        col6, col7 = st.columns([3, 2])
+        with col6:
+            cod = st.text_input("Código Opção (opcional):", key="cod")
+        with col7:
+            st.write("")
+            if st.button("💾 Gravar", use_container_width=True, type="primary"):
+                if salvar_operacao(st.session_state.user["id"], f"{acao}.SA", tipo, int(qtd), pc, pv, cod):
+                    st.success("✅ Operação gravada!")
+                    st.rerun()
+        
+        st.markdown("---")
+        st.markdown("## 📋 Suas Operações")
+        
+        if operacoes:
+            # Criar DataFrame
+            df = pd.DataFrame(operacoes)
+            df["Resultado"] = df.apply(
+                lambda row: f"R$ {(row['preco_venda'] - row['preco_compra']) * row['qtd']:.2f}" 
+                if row['preco_venda'] else "Aberto",
+                axis=1
+            )
+            
+            # Exibir tabela estilizada
+            st.dataframe(
+                df[["ticker", "tipo_ativo", "qtd", "preco_compra", "preco_venda", "Resultado", "status", "data_operacao"]],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            st.markdown("---")
+            st.markdown("## ✏️ Editar / Deletar Operações")
+            
+            col_op1, col_op2 = st.columns([1, 1])
+            
+            with col_op1:
+                op_selecionada = st.selectbox(
+                    "Selecione operação:",
+                    [f"{op['ticker']} - {op['qtd']} @ R${op['preco_compra']:.2f}" for op in operacoes],
+                    key="op_select"
+                )
+                idx_selecionado = [f"{op['ticker']} - {op['qtd']} @ R${op['preco_compra']:.2f}" for op in operacoes].index(op_selecionada)
+                op_edit = operacoes[idx_selecionado]
+                
+                st.markdown("### Editar Operação")
+                
+                col_e1, col_e2 = st.columns(2)
+                with col_e1:
+                    tipo_e = st.selectbox("Tipo:", ["Ação Pura", "Call", "Put"], 
+                                          index=["Ação Pura", "Call", "Put"].index(op_edit['tipo_ativo']),
+                                          key="tipo_e")
+                    qtd_e = st.number_input("Qtd:", value=op_edit['qtd'], key="qtd_e")
+                    pc_e = st.number_input("Preço Compra:", value=op_edit['preco_compra'], step=0.01, key="pc_e")
+                
+                with col_e2:
+                    pv_e = st.number_input("Preço Venda:", value=op_edit['preco_venda'] or 0.0, step=0.01, key="pv_e")
+                    cod_e = st.text_input("Código Opção:", value=op_edit['codigo_opcao'] or "", key="cod_e")
+                    status_e = st.selectbox("Status:", ["Em Andamento", "Fechada", "Cancelada"],
+                                            index=["Em Andamento", "Fechada", "Cancelada"].index(op_edit['status']),
+                                            key="status_e")
+                
+                if st.button("✅ Atualizar", use_container_width=True, type="primary", key="btn_update"):
+                    if atualizar_operacao(op_edit['id'], tipo_e, int(qtd_e), pc_e, pv_e, cod_e, status_e):
+                        st.success("✅ Operação atualizada!")
+                        st.rerun()
+            
+            with col_op2:
+                st.markdown("### Deletar Operação")
+                op_deletar = st.selectbox(
+                    "Selecione para deletar:",
+                    [f"{op['ticker']} - {op['qtd']} @ R${op['preco_compra']:.2f}" for op in operacoes],
+                    key="op_delete"
+                )
+                idx_delete = [f"{op['ticker']} - {op['qtd']} @ R${op['preco_compra']:.2f}" for op in operacoes].index(op_deletar)
+                op_del = operacoes[idx_delete]
+                
+                st.warning(f"⚠️ Você vai deletar: {op_del['ticker']} - {op_del['qtd']} unidades")
+                
+                if st.button("🗑️ DELETAR OPERAÇÃO", use_container_width=True, type="secondary", key="btn_delete"):
+                    if deletar_operacao(op_del['id']):
+                        st.success("✅ Operação deletada!")
+                        st.rerun()
+        else:
+            st.info("Nenhuma operação registrada ainda.")
+    
+    # ===== TAB 2: RELATÓRIOS =====
+    with tab2:
+        st.markdown("## 📊 Relatórios e Análises")
+        
+        if operacoes:
+            df = pd.DataFrame(operacoes)
+            
+            # Métricas principais
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            
+            total_ops = len(df)
+            ops_abertas = len(df[df['status'] == 'Em Andamento'])
+            ops_fechadas = len(df[df['status'] == 'Fechada'])
+            
+            with col_m1:
+                st.metric("📌 Total de Operações", total_ops)
+            with col_m2:
+                st.metric("🔄 Abertas", ops_abertas)
+            with col_m3:
+                st.metric("✅ Fechadas", ops_fechadas)
+            
+            # Lucro/Prejuízo
+            df['lucro'] = df.apply(
+                lambda row: (row['preco_venda'] - row['preco_compra']) * row['qtd'] 
+                if row['preco_venda'] else 0,
+                axis=1
+            )
+            
+            lucro_total = df['lucro'].sum()
+            with col_m4:
+                if lucro_total >= 0:
+                    st.metric("💰 Lucro/Prejuízo Total", f"R$ {lucro_total:.2f}", delta=f"+{lucro_total:.2f}")
+                else:
+                    st.metric("💰 Lucro/Prejuízo Total", f"R$ {lucro_total:.2f}", delta=f"{lucro_total:.2f}")
+            
+            st.markdown("---")
+            
+            # Gráficos
+            col_g1, col_g2 = st.columns(2)
+            
+            with col_g1:
+                st.markdown("### Operações por Tipo")
+                tipo_counts = df['tipo_ativo'].value_counts()
+                fig_tipo = px.pie(
+                    values=tipo_counts.values,
+                    names=tipo_counts.index,
+                    color_discrete_sequence=["#667eea", "#764ba2", "#f093fb"]
+                )
+                st.plotly_chart(fig_tipo, use_container_width=True)
+            
+            with col_g2:
+                st.markdown("### Status das Operações")
+                status_counts = df['status'].value_counts()
+                fig_status = px.bar(
+                    x=status_counts.index,
+                    y=status_counts.values,
+                    color_discrete_sequence=["#667eea"]
+                )
+                st.plotly_chart(fig_status, use_container_width=True)
+            
+            # Lucro por ticker
+            st.markdown("### Lucro/Prejuízo por Ação")
+            lucro_ticker = df.groupby('ticker')['lucro'].sum().sort_values(ascending=False)
+            
+            fig_lucro = go.Figure()
+            colors = ['#f093fb' if x >= 0 else '#fa709a' for x in lucro_ticker.values]
+            fig_lucro.add_trace(go.Bar(
+                x=lucro_ticker.index,
+                y=lucro_ticker.values,
+                marker=dict(color=colors)
+            ))
+            fig_lucro.update_layout(
+                title="Resultado por Ticker",
+                xaxis_title="Ticker",
+                yaxis_title="Lucro/Prejuízo (R$)",
+                height=400
+            )
+            st.plotly_chart(fig_lucro, use_container_width=True)
+            
+            # Tabela resumida
+            st.markdown("### Resumo por Ticker")
+            resumo = df.groupby('ticker').agg({
+                'qtd': 'sum',
+                'lucro': 'sum'
+            }).round(2)
+            resumo.columns = ['Total de Ações', 'Lucro/Prejuízo']
+            st.dataframe(resumo, use_container_width=True)
+        
+        else:
+            st.info("Sem dados para gerar relatórios. Crie operações primeiro!")
+    
+    # ===== TAB 3: ANÁLISE =====
+    with tab3:
+        st.markdown("## 📈 Análise Detalhada")
+        
+        if operacoes:
+            df = pd.DataFrame(operacoes)
+            
+            # Seletor de ticker
+            ticker_selecionado = st.selectbox("Selecione um ticker:", sorted(df['ticker'].unique()))
+            df_ticker = df[df['ticker'] == ticker_selecionado]
+            
+            col_a1, col_a2, col_a3 = st.columns(3)
+            
+            with col_a1:
+                st.metric("Total de Operações", len(df_ticker))
+            with col_a2:
+                qtd_total = df_ticker['qtd'].sum()
+                st.metric("Total de Ações", qtd_total)
+            with col_a3:
+                preco_medio = (df_ticker['preco_compra'] * df_ticker['qtd']).sum() / qtd_total if qtd_total > 0 else 0
+                st.metric("Preço Médio", f"R$ {preco_medio:.2f}")
+            
+            st.markdown("---")
+            st.markdown("### Histórico de Operações")
+            st.dataframe(df_ticker[['tipo_ativo', 'qtd', 'preco_compra', 'preco_venda', 'status', 'data_operacao']], 
+                        use_container_width=True, hide_index=True)
+        
+        else:
+            st.info("Sem dados para análise. Crie operações primeiro!")
