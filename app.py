@@ -1,99 +1,79 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
-from datetime import datetime
 import sqlite3
-import hashlib
-import uuid
+from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 
-# ============ CONFIG ============
-st.set_page_config(page_title="Terminal B3 Master", layout="wide")
+# Configuração da Interface (Layout Profissional)
+st.set_page_config(page_title="Auditoria de Ativos - CDD Itabuna", layout="wide")
 
-# ============ SCRAPING B3 ============
-def obter_preco_opcao_b3(ticker_opcao):
+st.markdown("""
+<style>
+    .stApp {background-color: #f8f9fa;}
+    .reportview-container .main .block-container {padding-top: 1rem;}
+    .audit-card {border-left: 5px solid #2e86de; padding: 10px; background: white; margin-bottom: 10px;}
+</style>
+""", unsafe_allow_html=True)
+
+# Lógica de Auditoria (O "O que tem a ver com auditoria logística?")
+# Auditoria Logística = Comparação de base (origem) vs. dado coletado (destino).
+# Aqui: Preço de Compra (Base) vs. Preço de Mercado (Status Atual).
+
+def obter_preco_scraping(ticker):
+    # Simula a conferência de "status de entrega" do ativo no mercado
     try:
-        url = f"https://statusinvest.com.br/opcoes/{ticker_opcao.replace('.SA', '')}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            preco_element = soup.find('strong', class_='value d-block lh-4 fs-4 fw-700')
-            if preco_element:
-                return float(preco_element.text.replace(',', '.'))
+        url = f"https://statusinvest.com.br/opcoes/{ticker}"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=3)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        val = soup.find('strong', class_='value d-block lh-4 fs-4 fw-700')
+        return float(val.text.replace(',', '.')) if val else None
     except: return None
-    return None
 
-def calcular_preco(ticker, preco_compra, tipo_ativo):
-    if tipo_ativo in ["Call", "Put"]:
-        preco_scrap = obter_preco_opcao_b3(ticker)
-        if preco_scrap: return preco_scrap, "Scraping"
-    try:
-        hist = yf.Ticker(ticker).history(period="1d")
-        if not hist.empty: return float(hist['Close'].iloc[-1]), "API"
-    except: pass
-    return preco_compra, "Manual"
+# Interface principal
+st.title("🛡️ Auditoria e Monitoramento de Ativos")
+st.caption("Unidade: CDD Itabuna | Foco: Gestão de Risco e Conformidade de Posições")
 
-# ============ BANCO DE DADOS ============
-DB_PATH = "terminal_b3.db"
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS operacoes (id TEXT PRIMARY KEY, ticker TEXT, tipo_ativo TEXT, qtd INTEGER, preco_compra REAL, codigo_opcao TEXT, status TEXT DEFAULT 'Aberta', data_operacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    conn.commit(); conn.close()
-
-init_db()
-
-# ============ INTERFACE ============
-st.title("📊 Terminal B3 Master - Auditoria Logística")
-
-# Botão de Atualização em Massa
-if st.button("🔄 Forçar Atualização de Preços em Massa"):
-    st.cache_data.clear()
-    st.rerun()
-
-st.info(f"🕒 Última verificação do sistema: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-
-# Exibição de Operações
-conn = sqlite3.connect(DB_PATH)
-df = pd.read_sql_query("SELECT * FROM operacoes", conn)
-conn.close()
-
-if not df.empty:
-    lista_exibicao = []
-    for _, op in df.iterrows():
-        ticker_busca = f"{op['codigo_opcao']}.SA" if op['tipo_ativo'] in ["Call", "Put"] else op['ticker']
-        preco_atual, origem = calcular_preco(ticker_busca, op['preco_compra'], op['tipo_ativo'])
-        
-        lucro = (preco_atual - op['preco_compra']) * op['qtd']
-        icone = "🟢" if origem == "API" else "🔍" if origem == "Scraping" else "⚠️"
-        
-        lista_exibicao.append({
-            "Ativo": op['codigo_opcao'] if op['codigo_opcao'] else op['ticker'].replace(".SA", ""),
-            "Tipo": op['tipo_ativo'],
-            "Qtd": op['qtd'],
-            "Compra": f"R$ {op['preco_compra']:.2f}",
-            "Atual": f"{icone} R$ {preco_atual:.2f}",
-            "Resultado": f"R$ {lucro:.2f}"
-        })
+# Área de Auditoria (Interface)
+with st.container():
+    st.subheader("📋 Painel de Conferência de Posições")
     
-    st.dataframe(pd.DataFrame(lista_exibicao), use_container_width=True)
-    st.caption("Legenda: 🟢 API Financeira | 🔍 Robô de Scraping | ⚠️ Preço Manual (Ajuste em 'Editar')")
-else:
-    st.warning("Nenhuma operação registrada.")
+    # Simulação da base de dados de auditoria
+    conn = sqlite3.connect("terminal_b3.db")
+    df = pd.read_sql_query("SELECT * FROM operacoes", conn)
+    conn.close()
 
-# Lançamento
-st.subheader("➕ Lançar Nova Operação")
-col1, col2, col3 = st.columns(3)
-with col1: ticker = st.text_input("Ticker (Ex: BEEF3):").upper()
-with col2: tipo = st.selectbox("Tipo:", ["Ação Pura", "Call", "Put"])
-with col3: preco = st.number_input("Preço:", value=0.00)
-cod_op = st.text_input("Código da Opção (se houver):").upper()
+    if not df.empty:
+        df['Auditoria_Status'] = df.apply(lambda row: 'Conforme' if row['preco_compra'] > 0 else 'Discrepância', axis=1)
+        
+        # Display dos ativos como "Itens sob Auditoria"
+        for _, item in df.iterrows():
+            with st.container():
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Ativo", item['ticker'].replace(".SA", ""))
+                col2.metric("Base (Compra)", f"R$ {item['preco_compra']:.2f}")
+                
+                # O sistema audita se houve desvio
+                preco_mercado = obter_preco_scraping(item['ticker'].replace(".SA", "")) or item['preco_compra']
+                col3.metric("Mercado (Atual)", f"R$ {preco_mercado:.2f}")
+                
+                delta = ((preco_mercado - item['preco_compra']) / item['preco_compra']) * 100
+                col4.metric("Desvio (Auditoria)", f"{delta:.2f}%")
+    else:
+        st.warning("Nenhuma ocorrência de ativo registrada para auditoria.")
 
-if st.button("Gravar"):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('INSERT INTO operacoes (id, ticker, tipo_ativo, qtd, preco_compra, codigo_opcao) VALUES (?,?,?,?,?,?)', 
-              (str(uuid.uuid4()), f"{ticker}.SA", tipo, 100, preco, cod_op))
-    conn.commit(); conn.close(); st.rerun()
+# Área de Registro de Ocorrências (O seu "input" de auditor)
+with st.sidebar:
+    st.header("⚙️ Ferramentas de Auditor")
+    ticker_input = st.text_input("Registrar Ativo para Auditoria:")
+    valor_base = st.number_input("Preço de Base (Entrada):", format="%.2f")
+    if st.button("Validar Posição"):
+        # Adiciona ao seu "livro de registros"
+        conn = sqlite3.connect("terminal_b3.db")
+        c = conn.cursor()
+        c.execute("INSERT INTO operacoes (id, ticker, preco_compra, tipo_ativo, qtd) VALUES (?,?,?,?,?)", 
+                  (str(hash(datetime.now())), f"{ticker_input}.SA", valor_base, 'Ação', 1))
+        conn.commit()
+        conn.close()
+        st.success("Ocorrência registrada no log.")
