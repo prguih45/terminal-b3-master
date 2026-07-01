@@ -76,7 +76,7 @@ def carregar_banco_b3():
         "CPFE3.SA": {"Empresa": "CPFL Energia", "Setor": "Utilidade Pública", "Consenso": "Alta", "Alvo": 39.0, "Upside": 11.0},
     }
 
-@st.cache_data(ttl=300)  # Cache por 5 minutos
+@st.cache_data(ttl=300)
 def obter_preco_atual(ticker):
     """Obtém preço em tempo real via yfinance com cache"""
     try:
@@ -93,7 +93,7 @@ def calcular_preco_com_fallback(ticker, preco_compra):
     preco = obter_preco_atual(ticker)
     if preco and preco > 0:
         return preco
-    return preco_compra  # Fallback: usa preço de compra
+    return preco_compra
 
 # ============ DATABASE ============
 DB_PATH = "terminal_b3.db"
@@ -318,24 +318,20 @@ else:
         with col4:
             preco = st.number_input("Preço Compra (R$):", min_value=0.01, value=10.0, step=0.01, key="preco_op")
         
-        # Campo de código APENAS para Call/Put
         codigo = ""
         if tipo in ["Call", "Put"]:
             st.markdown("---")
             
-            # Sugestão automática de código
-            mes_atual = datetime.now().strftime("%b").upper()
-            tipo_letra = "C" if tipo == "Call" else "P"
-            codigo_sugestao = f"{ticker_selecionado}{tipo_letra}{mes_atual}"
+            # Formatação ajustada da sugestão
+            letras_base = ''.join([char for char in ticker_selecionado if not char.isdigit()])
+            tipo_letra = "C" if tipo == "Call" else "O"  # Apenas ilustrativo para sugestão
+            codigo_sugestao = f"{letras_base}{tipo_letra}123"
             
-            st.write(f"**Código de Opção** (sugestão: {codigo_sugestao})")
+            st.write(f"**Código de Opção** (Exemplo B3: {codigo_sugestao})")
             
             col_cod1, col_cod2 = st.columns([3, 1])
             with col_cod1:
-                codigo = st.text_input("Digite o código da opção:", value=codigo_sugestao, key=f"codigo_{tipo}_{ticker_selecionado}")
-            with col_cod2:
-                if st.button("✓ Usar Sugestão", key="use_suggestion"):
-                    codigo = codigo_sugestao
+                codigo = st.text_input("Digite o código EXATO da opção:", value="", key=f"codigo_{tipo}_{ticker_selecionado}").upper().strip()
             
             if not codigo:
                 st.warning("⚠️ Código de opção é obrigatório para Call/Put")
@@ -343,7 +339,6 @@ else:
         if st.button("💾 Gravar Operação", use_container_width=True, key="btn_gravar"):
             ticker_full = f"{ticker_selecionado}.SA"
             
-            # Validação
             if tipo in ["Call", "Put"] and not codigo:
                 st.error("❌ Código de opção é obrigatório para Call/Put")
             elif salvar_operacao(st.session_state.user["id"], ticker_full, tipo, int(qtd), preco, codigo):
@@ -358,12 +353,22 @@ else:
         if operacoes:
             df_ops = []
             for op in operacoes:
-                preco_atual = calcular_preco_com_fallback(op["ticker"], op["preco_compra"])
-                lucro_prejuizo = (preco_atual - op["preco_compra"]) * op["qtd"]
-                percentual = ((preco_atual - op["preco_compra"]) / op["preco_compra"]) * 100
+                # 🚀 CORREÇÃO CRÍTICA AQUI: Direciona a busca para o ticker correto
+                if op["tipo_ativo"] in ["Call", "Put"] and op["codigo_opcao"]:
+                    ticker_busca = f"{op['codigo_opcao']}.SA"
+                else:
+                    ticker_busca = op["ticker"]
                 
+                preco_atual = calcular_preco_com_fallback(ticker_busca, op["preco_compra"])
+                lucro_prejuizo = (preco_atual - op["preco_compra"]) * op["qtd"]
+                percentual = ((preco_atual - op["preco_compra"]) / op["preco_compra"]) * 100 if op["preco_compra"] > 0 else 0
+                
+                # Formata a exibição do ticker na tabela
+                display_ticker = op["codigo_opcao"] if op["tipo_ativo"] in ["Call", "Put"] else op["ticker"].replace(".SA", "")
+
                 df_ops.append({
-                    "Ticker": op["ticker"],
+                    "Ativo": display_ticker,
+                    "Base": op["ticker"].replace(".SA", ""),
                     "Tipo": op["tipo_ativo"],
                     "Qtd": op["qtd"],
                     "Preço Compra": f"R$ {op['preco_compra']:.2f}",
@@ -380,13 +385,15 @@ else:
             col_edit, col_del = st.columns(2)
             
             with col_edit:
-                st.write("**Editar:**")
-                op_edit = st.selectbox("Selecione:", [f"{op['ticker']} - {op['qtd']} @ R${op['preco_compra']:.2f}" for op in operacoes], key="edit")
-                idx = [f"{op['ticker']} - {op['qtd']} @ R${op['preco_compra']:.2f}" for op in operacoes].index(op_edit)
-                op_selecionada = operacoes[idx]
+                st.write("**Editar (Fechamento manual de posições):**")
+                # Usa id para evitar ambiguidades no selectbox
+                op_formatada = [f"{op['codigo_opcao'] if op['codigo_opcao'] else op['ticker']} - {op['qtd']} @ R${op['preco_compra']:.2f}" for op in operacoes]
+                op_edit_idx = st.selectbox("Selecione para editar:", range(len(operacoes)), format_func=lambda x: op_formatada[x], key="edit")
+                
+                op_selecionada = operacoes[op_edit_idx]
                 
                 status_edit = st.selectbox("Status:", ["Aberta", "Fechada"], key="status_edit")
-                preco_edit = st.number_input("Novo Preço:", value=op_selecionada["preco_compra"], key="preco_edit")
+                preco_edit = st.number_input("Novo Preço (Use para atualizar prêmio de opções ou fechamento):", value=op_selecionada["preco_compra"], key="preco_edit")
                 qtd_edit = st.number_input("Nova Qtd:", value=op_selecionada["qtd"], key="qtd_edit")
                 
                 if st.button("✅ Atualizar", key="btn_edit"):
@@ -396,9 +403,8 @@ else:
             
             with col_del:
                 st.write("**Deletar:**")
-                op_del = st.selectbox("Selecione:", [f"{op['ticker']} - {op['qtd']} @ R${op['preco_compra']:.2f}" for op in operacoes], key="delete")
-                idx_del = [f"{op['ticker']} - {op['qtd']} @ R${op['preco_compra']:.2f}" for op in operacoes].index(op_del)
-                op_selecionada_del = operacoes[idx_del]
+                op_del_idx = st.selectbox("Selecione para excluir:", range(len(operacoes)), format_func=lambda x: op_formatada[x], key="delete")
+                op_selecionada_del = operacoes[op_del_idx]
                 
                 if st.button("🗑️ DELETAR", key="btn_delete"):
                     if deletar_operacao(op_selecionada_del["id"]):
@@ -414,7 +420,7 @@ else:
         df_recomendacoes = []
         for ticker, dados in banco_b3.items():
             df_recomendacoes.append({
-                "Ação": ticker,
+                "Ação": ticker.replace(".SA", ""),
                 "Empresa": dados["Empresa"],
                 "Setor": dados["Setor"],
                 "Consenso": dados["Consenso"],
@@ -424,7 +430,6 @@ else:
         
         df_rec = pd.DataFrame(df_recomendacoes)
         
-        # Filtros
         col_f1, col_f2 = st.columns(2)
         with col_f1:
             consenso_filter = st.multiselect("Consenso:", ["Alta", "Neutro", "Baixa"], default=["Alta", "Neutro", "Baixa"])
@@ -435,7 +440,6 @@ else:
             (df_rec["Consenso"].isin(consenso_filter)) & 
             (df_rec["Setor"].isin(setor_filter))
         ]
-        
         st.dataframe(df_filtrado, use_container_width=True, hide_index=True)
     
     # ===== TAB 3: CARTEIRA =====
@@ -448,7 +452,13 @@ else:
             valor_atual_total = 0
             
             for op in operacoes:
-                preco_atual = calcular_preco_com_fallback(op["ticker"], op["preco_compra"])
+                # 🚀 CORREÇÃO CRÍTICA AQUI TAMBÉM
+                if op["tipo_ativo"] in ["Call", "Put"] and op["codigo_opcao"]:
+                    ticker_busca = f"{op['codigo_opcao']}.SA"
+                else:
+                    ticker_busca = op["ticker"]
+                
+                preco_atual = calcular_preco_com_fallback(ticker_busca, op["preco_compra"])
                 investimento = op["preco_compra"] * op["qtd"]
                 valor_atual = preco_atual * op["qtd"]
                 lucro = valor_atual - investimento
@@ -456,15 +466,17 @@ else:
                 investimento_total += investimento
                 valor_atual_total += valor_atual
                 
+                display_ticker = op["codigo_opcao"] if op["tipo_ativo"] in ["Call", "Put"] else op["ticker"].replace(".SA", "")
+
                 df_carteira.append({
-                    "Ticker": op["ticker"],
+                    "Ativo": display_ticker,
+                    "Tipo": op["tipo_ativo"],
                     "Qtd": op["qtd"],
                     "Investimento": f"R$ {investimento:.2f}",
                     "Valor Atual": f"R$ {valor_atual:.2f}",
                     "Lucro/Prejuízo": f"R$ {lucro:.2f}"
                 })
             
-            # Métricas
             col_m1, col_m2, col_m3 = st.columns(3)
             with col_m1:
                 st.metric("Investimento Total", f"R$ {investimento_total:.2f}")
@@ -481,20 +493,19 @@ else:
     
     # ===== TAB 4: RELATÓRIOS =====
     with tab4:
-        st.subheader("📊 Relatórios")
+        st.subheader("📊 Relatórios Gráficos")
         
         if operacoes:
-            # Por tipo
             col_r1, col_r2 = st.columns(2)
             
             with col_r1:
                 tipo_counts = pd.Series([op["tipo_ativo"] for op in operacoes]).value_counts()
-                fig1 = px.pie(values=tipo_counts.values, names=tipo_counts.index, title="Operações por Tipo")
+                fig1 = px.pie(values=tipo_counts.values, names=tipo_counts.index, title="Distribuição por Tipo de Ativo", hole=0.4)
                 st.plotly_chart(fig1, use_container_width=True)
             
             with col_r2:
                 status_counts = pd.Series([op["status"] for op in operacoes]).value_counts()
-                fig2 = px.bar(x=status_counts.index, y=status_counts.values, title="Operações por Status")
+                fig2 = px.bar(x=status_counts.index, y=status_counts.values, title="Operações por Status (Aberta vs Fechada)", color=status_counts.index)
                 st.plotly_chart(fig2, use_container_width=True)
         else:
-            st.info("Sem dados para relatórios!")
+            st.info("Sem dados para compor os relatórios gráficos!")
