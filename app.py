@@ -76,15 +76,24 @@ def carregar_banco_b3():
         "CPFE3.SA": {"Empresa": "CPFL Energia", "Setor": "Utilidade Pública", "Consenso": "Alta", "Alvo": 39.0, "Upside": 11.0},
     }
 
+@st.cache_data(ttl=300)  # Cache por 5 minutos
 def obter_preco_atual(ticker):
-    """Obtém preço em tempo real via yfinance"""
+    """Obtém preço em tempo real via yfinance com cache"""
     try:
         dados = yf.download(ticker, period="1d", progress=False, threads=False)
         if not dados.empty:
-            return float(dados['Close'].iloc[-1])
-    except:
+            preco = float(dados['Close'].iloc[-1])
+            return preco
+    except Exception as e:
         pass
     return None
+
+def calcular_preco_com_fallback(ticker, preco_compra):
+    """Tenta buscar preço, se falhar retorna preço de compra como fallback"""
+    preco = obter_preco_atual(ticker)
+    if preco and preco > 0:
+        return preco
+    return preco_compra  # Fallback: usa preço de compra
 
 # ============ DATABASE ============
 DB_PATH = "terminal_b3.db"
@@ -299,23 +308,49 @@ else:
     with tab1:
         st.subheader("💱 Lançar Operação")
         
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            ticker_selecionado = st.selectbox("Ação:", sorted([t.replace(".SA", "") for t in banco_b3.keys()]))
+            ticker_selecionado = st.selectbox("Ação:", sorted([t.replace(".SA", "") for t in banco_b3.keys()]), key="ticker_op")
         with col2:
-            tipo = st.selectbox("Tipo:", ["Ação Pura", "Call", "Put"])
+            tipo = st.selectbox("Tipo:", ["Ação Pura", "Call", "Put"], key="tipo_op")
         with col3:
-            qtd = st.number_input("Qtd:", min_value=1, value=100, step=100)
+            qtd = st.number_input("Qtd:", min_value=1, value=100, step=100, key="qtd_op")
         with col4:
-            preco = st.number_input("Preço Compra (R$):", min_value=0.01, value=10.0, step=0.01)
-        with col5:
-            codigo = st.text_input("Código Opção (opcional):", "")
+            preco = st.number_input("Preço Compra (R$):", min_value=0.01, value=10.0, step=0.01, key="preco_op")
         
-        if st.button("💾 Gravar Operação", use_container_width=True):
+        # Campo de código APENAS para Call/Put
+        codigo = ""
+        if tipo in ["Call", "Put"]:
+            st.markdown("---")
+            
+            # Sugestão automática de código
+            mes_atual = datetime.now().strftime("%b").upper()
+            tipo_letra = "C" if tipo == "Call" else "P"
+            codigo_sugestao = f"{ticker_selecionado}{tipo_letra}{mes_atual}"
+            
+            st.write(f"**Código de Opção** (sugestão: {codigo_sugestao})")
+            
+            col_cod1, col_cod2 = st.columns([3, 1])
+            with col_cod1:
+                codigo = st.text_input("Digite o código da opção:", value=codigo_sugestao, key=f"codigo_{tipo}_{ticker_selecionado}")
+            with col_cod2:
+                if st.button("✓ Usar Sugestão", key="use_suggestion"):
+                    codigo = codigo_sugestao
+            
+            if not codigo:
+                st.warning("⚠️ Código de opção é obrigatório para Call/Put")
+        
+        if st.button("💾 Gravar Operação", use_container_width=True, key="btn_gravar"):
             ticker_full = f"{ticker_selecionado}.SA"
-            if salvar_operacao(st.session_state.user["id"], ticker_full, tipo, int(qtd), preco, codigo):
-                st.success("✅ Operação gravada!")
+            
+            # Validação
+            if tipo in ["Call", "Put"] and not codigo:
+                st.error("❌ Código de opção é obrigatório para Call/Put")
+            elif salvar_operacao(st.session_state.user["id"], ticker_full, tipo, int(qtd), preco, codigo):
+                st.success("✅ Operação gravada com sucesso!")
                 st.rerun()
+            else:
+                st.error("❌ Erro ao gravar operação")
         
         st.markdown("---")
         st.subheader("📋 Suas Operações")
@@ -323,21 +358,16 @@ else:
         if operacoes:
             df_ops = []
             for op in operacoes:
-                preco_atual = obter_preco_atual(op["ticker"])
-                if preco_atual:
-                    lucro_prejuizo = (preco_atual - op["preco_compra"]) * op["qtd"]
-                    percentual = ((preco_atual - op["preco_compra"]) / op["preco_compra"]) * 100
-                else:
-                    lucro_prejuizo = 0
-                    percentual = 0
-                    preco_atual = "N/A"
+                preco_atual = calcular_preco_com_fallback(op["ticker"], op["preco_compra"])
+                lucro_prejuizo = (preco_atual - op["preco_compra"]) * op["qtd"]
+                percentual = ((preco_atual - op["preco_compra"]) / op["preco_compra"]) * 100
                 
                 df_ops.append({
                     "Ticker": op["ticker"],
                     "Tipo": op["tipo_ativo"],
                     "Qtd": op["qtd"],
                     "Preço Compra": f"R$ {op['preco_compra']:.2f}",
-                    "Preço Atual": f"R$ {preco_atual:.2f}" if isinstance(preco_atual, float) else preco_atual,
+                    "Preço Atual": f"R$ {preco_atual:.2f}",
                     "L/P": f"R$ {lucro_prejuizo:.2f}",
                     "%": f"{percentual:.2f}%"
                 })
@@ -418,22 +448,21 @@ else:
             valor_atual_total = 0
             
             for op in operacoes:
-                preco_atual = obter_preco_atual(op["ticker"])
-                if preco_atual:
-                    investimento = op["preco_compra"] * op["qtd"]
-                    valor_atual = preco_atual * op["qtd"]
-                    lucro = valor_atual - investimento
-                    
-                    investimento_total += investimento
-                    valor_atual_total += valor_atual
-                    
-                    df_carteira.append({
-                        "Ticker": op["ticker"],
-                        "Qtd": op["qtd"],
-                        "Investimento": f"R$ {investimento:.2f}",
-                        "Valor Atual": f"R$ {valor_atual:.2f}",
-                        "Lucro/Prejuízo": f"R$ {lucro:.2f}"
-                    })
+                preco_atual = calcular_preco_com_fallback(op["ticker"], op["preco_compra"])
+                investimento = op["preco_compra"] * op["qtd"]
+                valor_atual = preco_atual * op["qtd"]
+                lucro = valor_atual - investimento
+                
+                investimento_total += investimento
+                valor_atual_total += valor_atual
+                
+                df_carteira.append({
+                    "Ticker": op["ticker"],
+                    "Qtd": op["qtd"],
+                    "Investimento": f"R$ {investimento:.2f}",
+                    "Valor Atual": f"R$ {valor_atual:.2f}",
+                    "Lucro/Prejuízo": f"R$ {lucro:.2f}"
+                })
             
             # Métricas
             col_m1, col_m2, col_m3 = st.columns(3)
